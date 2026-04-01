@@ -1,0 +1,355 @@
+'use client';
+
+import { useQuery } from '@tanstack/react-query';
+import { useApiClient } from '@/hooks/use-api-client';
+import { useVnbContext } from '@/hooks/use-vnb-context';
+import { API } from '@/config/api-endpoints';
+import { STALE_TIME_MEDIUM } from '@/lib/constants';
+import { KpiCard } from '@/components/shared/kpi-card';
+import { PartialDataBanner } from '@/components/shared/partial-data-banner';
+import { EmptyState } from '@/components/shared/empty-state';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { SeverityChip } from '@/components/shared/severity-chip';
+import { DecisionBadge } from '@/components/shared/decision-badge';
+import { formatDateTime, displayValue } from '@/lib/utils';
+import { AlertTriangle, Activity, Building2, Zap, CheckCircle2, Database, Search, Check } from 'lucide-react';
+import type { Severity, DecisionStatus } from '@/types/ui';
+import { useRef, useState } from 'react';
+import { useMarketPartnerSearch } from '@/hooks/use-vnb-context';
+
+interface AgentResult {
+  decision?: string;
+  findingCount?: number | null;
+  lastRunAt?: string | null;
+  score?: number | null;
+}
+
+interface VnbOverviewResponse {
+  identity?: {
+    name?: string | null;
+    mastrId?: string | null;
+    bdew?: string | null;
+    bnr?: string | null;
+  };
+  kpis?: {
+    totalInstallations?: number | null;
+    totalCapacityMW?: number | null;
+    redispatchEligible?: number | null;
+    ewkAnschlussdauerWeeks?: number | null;
+    ewkDigitalisierungsScore?: number | null;
+    ewkUmsetzungsquote?: number | null;
+    mastrQualityScore?: number | null;
+    datapointsHealthy?: number | null;
+    datapointsStale?: number | null;
+    datapointsErrored?: number | null;
+  };
+  latestAgentResults?: {
+    mastrQuality?: AgentResult | null;
+    gridConnection?: AgentResult | null;
+    energySharing?: AgentResult | null;
+    redispatch?: AgentResult | null;
+    [key: string]: AgentResult | null | undefined;
+  };
+  alerts?: Array<{
+    severity: string;
+    message: string;
+    message_en?: string;
+    code?: string;
+    group?: string;
+    currentValue?: number | null;
+    threshold?: number | null;
+    recommendation?: string;
+    ewkImpact?: boolean;
+  }>;
+  timestamp?: string;
+  _errors?: string[];
+}
+
+const AGENT_LABELS: Record<string, string> = {
+  mastrQuality: 'MaStR-Qualität',
+  gridConnection: 'Netzanschluss',
+  energySharing: 'Gemeinschaftl. Erzeugung',
+  redispatch: 'Redispatch 2.0',
+};
+
+function InlineVnbPicker() {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const { setVnb } = useVnbContext();
+  const { data: partners, isLoading } = useMarketPartnerSearch(query);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleBlur = (e: React.FocusEvent) => {
+    if (!containerRef.current?.contains(e.relatedTarget as Node)) {
+      setOpen(false);
+    }
+  };
+
+  const select = (bdew: string, mastr: string, n: string) => {
+    setVnb(bdew, mastr, n);
+    setQuery('');
+    setOpen(false);
+  };
+
+  return (
+    <div ref={containerRef} className="relative w-72" onBlur={handleBlur}>
+      <div className="relative flex items-center">
+        <Search className="absolute left-3 h-4 w-4 text-muted-foreground pointer-events-none" />
+        <input
+          type="text"
+          value={query}
+          placeholder="BDEW-Code oder Name suchen…"
+          autoFocus
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+
+      {open && (
+        <div className="absolute top-full left-1/2 -translate-x-1/2 z-50 mt-2 w-80 rounded-md border bg-popover shadow-lg overflow-hidden">
+          {isLoading && (
+            <div className="py-6 text-center text-sm text-muted-foreground">Suche…</div>
+          )}
+          {!isLoading && query.length < 2 && (
+            <div className="py-4 text-center text-sm text-muted-foreground">Mindestens 2 Zeichen eingeben.</div>
+          )}
+          {!isLoading && query.length >= 2 && (!partners || partners.length === 0) && (
+            <div className="py-4 text-center text-sm text-muted-foreground">Kein VNB gefunden.</div>
+          )}
+          {partners && partners.length > 0 && (
+            <ul className="max-h-72 overflow-y-auto py-1">
+              {partners.map((p, idx) => (
+                <li key={`${p.bdewCode}-${p.name}-${p.mastrId || 'na'}-${idx}`}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => { e.preventDefault(); select(p.bdewCode, p.mastrId, p.name); }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                  >
+                    <Check className="h-3.5 w-3.5 shrink-0 opacity-0" />
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{p.name}</p>
+                      <p className="text-xs text-muted-foreground">{p.bdewCode}</p>
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-6">
+      <Skeleton className="h-8 w-56 rounded" />
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-28 rounded-xl" />
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Skeleton className="h-52 rounded-xl" />
+        <Skeleton className="h-52 rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
+export function DashboardOverview() {
+  const { bdewCode, name } = useVnbContext();
+  const { get } = useApiClient();
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['dashboard-vnb-overview', bdewCode],
+    queryFn: () =>
+      get<VnbOverviewResponse>(API.DASHBOARD_VNB_OVERVIEW, {
+        params: { bdewCode },
+      }),
+    staleTime: STALE_TIME_MEDIUM,
+    enabled: !!bdewCode,
+  });
+
+  // No VNB selected yet — show welcome/onboarding state
+  if (!bdewCode) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-5 py-24 text-center text-muted-foreground">
+        <Building2 className="w-12 h-12 opacity-30" />
+        <div>
+          <p className="text-lg font-semibold text-foreground">Kein VNB ausgewählt</p>
+          <p className="text-sm mt-1 max-w-xs">
+            Suche nach einem Verteilnetzbetreiber, um das Dashboard zu laden.
+          </p>
+        </div>
+        <InlineVnbPicker />
+      </div>
+    );
+  }
+
+  if (isLoading) return <DashboardSkeleton />;
+
+  if (isError) {
+    return (
+      <EmptyState
+        icon={AlertTriangle}
+        title="Dashboard nicht verfügbar"
+        description="Die VNB-Übersicht konnte nicht geladen werden. Prüfe die API-Verbindung."
+      />
+    );
+  }
+
+  const kpis = data?.kpis;
+  const agentResultsObj = data?.latestAgentResults ?? {};
+  const agentEntries = Object.entries(agentResultsObj) as [string, AgentResult | null][];
+  const alerts = data?.alerts ?? [];
+  const errors = data?._errors;
+  const displayName = name ?? data?.identity?.name ?? 'Dashboard';
+  const displayBdew = bdewCode ?? data?.identity?.bdew;
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">{displayName}</h1>
+          {displayBdew && (
+            <p className="text-sm text-muted-foreground mt-0.5">BDEW {displayBdew}</p>
+          )}
+        </div>
+      </div>
+
+      {/* Partial data warning */}
+      {errors && errors.length > 0 && (
+        <PartialDataBanner sources={errors} messages={errors} />
+      )}
+
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <KpiCard
+          label="Anlagen gesamt"
+          value={kpis?.totalInstallations ?? null}
+          format="number"
+          icon={Zap}
+        />
+        <KpiCard
+          label="Nennleistung"
+          value={kpis?.totalCapacityMW ?? null}
+          unit="MW"
+          format="number"
+          icon={Activity}
+        />
+        <KpiCard
+          label="MaStR-Score"
+          value={kpis?.mastrQualityScore ?? null}
+          unit="%"
+          format="percent"
+          threshold={{ warning: 80, critical: 60, direction: 'below' }}
+        />
+        <KpiCard
+          label="Redispatch-Anlagen"
+          value={kpis?.redispatchEligible ?? null}
+          format="number"
+          threshold={{ warning: 5, critical: 20, direction: 'above' }}
+        />
+        <KpiCard
+          label="Datenpunkte OK"
+          value={kpis?.datapointsHealthy ?? null}
+          format="number"
+          icon={Database}
+          threshold={{ warning: 1, critical: 0, direction: 'below' }}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* Agent Results */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Activity className="h-4 w-4 text-primary" />
+              Agenten-Ergebnisse
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {agentEntries.length === 0 ? (
+              <EmptyState description="Noch keine Agenten-Läufe vorhanden." className="py-6" />
+            ) : (
+              <div className="space-y-2">
+                {agentEntries.map(([key, result]) => (
+                  <div
+                    key={key}
+                    className="flex items-center justify-between rounded-lg border border-border p-2.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {AGENT_LABELS[key] ?? key}
+                      </p>
+                      {result?.lastRunAt && (
+                        <p className="text-xs text-muted-foreground">
+                          {formatDateTime(result.lastRunAt)}
+                          {result.findingCount != null && ` · ${result.findingCount} Findings`}
+                        </p>
+                      )}
+                    </div>
+                    {result ? (
+                      <DecisionBadge decision={result.decision as DecisionStatus} />
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Noch nicht ausgeführt</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Alerts */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-orange-500" />
+              Aktive Alerts
+              {alerts.length > 0 && (
+                <Badge variant="destructive" className="text-xs">
+                  {alerts.length}
+                </Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {alerts.length === 0 ? (
+              <EmptyState
+                icon={CheckCircle2}
+                description="Keine aktiven Alerts — alles in Ordnung."
+                className="py-6"
+              />
+            ) : (
+              <div className="space-y-2">
+                {alerts.map((alert, i) => (
+                  <div
+                    key={i}
+                    className="flex items-start gap-2.5 rounded-lg border border-border p-2.5"
+                  >
+                    <SeverityChip severity={alert.severity as Severity} />
+                    <div className="min-w-0">
+                      <p className="text-sm leading-snug">{displayValue(alert.message)}</p>
+                      {alert.recommendation && (
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {alert.recommendation}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
