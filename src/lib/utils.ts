@@ -2,7 +2,8 @@ import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { format, formatDistanceToNow, parseISO } from 'date-fns';
 import { de } from 'date-fns/locale';
-import type { Severity, DecisionStatus } from '@/types/ui';
+import type { Severity, DecisionStatus, ValidationFieldError } from '@/types/ui';
+import axios from 'axios';
 
 // ── Tailwind class merge helper ──────────────────────────────────────────────
 export function cn(...inputs: ClassValue[]) {
@@ -138,4 +139,37 @@ export function debounce<T extends (...args: unknown[]) => void>(
     clearTimeout(timer);
     timer = setTimeout(() => fn(...args), wait);
   };
+}
+
+// ── API error helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Extract a human-readable message from an Axios error.
+ * Handles:
+ * - 422 VALIDATION_ERROR (Moleculer Fastest-Validator): returns `data[0].message`
+ * - 404 VNB_NOT_FOUND / 503 VNB_LOOKUP_ERROR: returns `message` from response body
+ * - Network / unknown errors: returns the fallback string
+ *
+ * Resolved via RES-CR-0001 (2026-04-02).
+ */
+export function getApiErrorMessage(
+  error: unknown,
+  fallback = 'Unbekannter Fehler'
+): string {
+  if (!axios.isAxiosError(error)) {
+    return error instanceof Error ? error.message : fallback;
+  }
+  const body = error.response?.data;
+  if (!body) return error.message || fallback;
+
+  // 422 VALIDATION_ERROR — first field message is most actionable
+  if (error.response?.status === 422 && Array.isArray(body.data)) {
+    const first = body.data[0] as ValidationFieldError | undefined;
+    if (first?.message) return first.message;
+  }
+
+  // Other structured Moleculer errors (503 VNB_LOOKUP_ERROR, 404 VNB_NOT_FOUND, …)
+  if (typeof body.message === 'string' && body.message) return body.message;
+
+  return fallback;
 }

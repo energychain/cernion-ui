@@ -9,6 +9,145 @@ Versions align with [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Planned
+- v0.20.2 — Market: ECharts spot prices, forecasts, residual load, CO₂
+- v0.20.3 — Agents: MaStR-Quality, Grid-Connection, Energy-Sharing, Redispatch
+- v0.20.4 — Datapoints: CRUD, health, snapshots, OE metadata
+- v0.20.5 — Monitors: VNB-Monitor, NBP-Monitor, Gas Storage, EWK benchmarks
+- v0.20.6 — Admin: Tokens, Jobs, System status
+- v0.20.7 — Polish: Error Boundaries, Skeletons, Dark Mode, E2E tests
+
+---
+
+## [0.20.2] — 2026-04-02
+
+### v0.20.2 — Hydration-Fixes + Backend-500-Handling (White Page)
+
+### Fixed
+
+#### Hydration (React 19 + Zustand persist)
+Alle drei Komponenten, die Zustand-`persist`-Stores direkt rendern, hatten eine
+React 19 Hydration-Mismatch: Der Server rendert mit dem Initialzustand (kein
+`localStorage`), der Client rehydriert synchron aus `localStorage` — die
+resultierenden Bäume weichen ab, React 19 bricht die Hydration ab und zeigt eine
+weiße Seite ohne Fehlermeldung in der Konsole (nur `"connected"` vom HMR-Client).
+
+- `app/(dashboard)/layout.tsx` — **Hauptursache**: SSR renderte Spinner
+  (`isAuthenticated = false`), Client renderte volles Layout (`isAuthenticated = true`
+  aus localStorage) → React 19 Hydration-Fehler → weiße Seite bei Reload.
+  Mounted-Guard ergänzt; Auth-Redirect nur nach Mount ausgeführt.
+- `features/dashboard/dashboard-overview.tsx` — Mounted-Guard für `bdewCode`.
+- `components/layout/header.tsx` — Mounted-Guard für `bdewCode` in `VnbSelector`.
+- `hooks/use-vnb-context.ts` — `useResolveVnbIdentity` las `data.canonical`
+  direkt statt `envelope.data.canonical` → TypeError → Crash.
+  `ApiEnvelope<T>`-Typ ergänzt.
+
+#### Backend-500-Handling (Syna GmbH / Socket Hang-Up)
+Für VNBs ohne vollständige Stammdaten (z.B. Syna GmbH, BDEW `9906311000005`)
+bricht das Backend die Verbindung mit einem Socket Hang-Up ab → HTTP 500 mit
+leerem Body. Das führte zu unbehandelten Promise-Rejections, die den gesamten
+Komponentenbaum zum Absturz brachten (weiße Seite, keine Console-Fehlermeldung).
+
+- `hooks/use-vnb-context.ts` — `useResolveVnbIdentity`: `retry: false` +
+  `throwOnError: false` ergänzt; ein Backend-500 propagiert nicht mehr als
+  Fehler in den Komponentenbaum.
+- `features/dashboard/dashboard-overview.tsx` — `vnb-overview`-Query: ebenfalls
+  `retry: false` + `throwOnError: false`; `isError`-Branch zeigt jetzt
+  „Anderen VNB auswählen"-Button der `clearVnb()` aufruft.
+- `components/layout/header.tsx` — `VnbSelector` in `<ErrorBoundary>` eingebettet;
+  bei Crash wird kompakter roter „VNB-Fehler — klicken zum Zurücksetzen"-Button
+  gezeigt der `clearVnb()` + ErrorBoundary-Reset aufruft.
+- `feedback/BR-0002-vnb-lookup-codes-500-socket-hangup.md` — Bug Report erstellt.
+
+#### Backend-Resolution RES-DR-0001 (market-snapshot region)
+- `src/config/api-endpoints.ts` — Konstante `MARKET_SNAPSHOT_REGION = 'Germany'`
+  ergänzt. ENTSO-E unterstützt ausschließlich länderbezogene Bidding-Zonen;
+  sub-nationale Angaben (`"Bayern"` etc.) sind ungültig und liefern
+  `renewableForecast24h: null`. Alle künftigen market-snapshot-Calls müssen
+  diese Konstante verwenden.
+- `src/stores/vnb-store.ts` — Irreführenden Kommentar am `region`-Feld korrigiert;
+  das Feld dient nur der Anzeige und wird **nicht** als API-Parameter übergeben.
+- `feedback/DR-0001-market-snapshot-region.md` — Status auf `resolved` gesetzt.
+
+#### Backend-Resolution RES-BR-0002 (vnb-lookup-codes socket hang-up)
+Backend: `timeout: 30_000` auf `vnbLookupCodes`-Action; MCP-Fehler → `503
+VNB_LOOKUP_ERROR`; unbekannte BDEW-Codes → `404 VNB_NOT_FOUND`; `vnbOverview`
+degradiert jetzt graceful (`kpis: null` + `_errors`) statt 500.
+
+- `src/features/dashboard/dashboard-overview.tsx` — `_errors`-Banner mappt
+  Service-Namen auf deutsche Labels (`"grid-operations.vnbLookupCodes"` →
+  „VNB-Stammdaten nicht verfügbar").
+- `src/features/dashboard/dashboard-overview.tsx` — `isError`-Zustand nutzt
+  `getApiErrorMessage()` für strukturierte Backend-Fehlermeldungen.
+- `feedback/BR-0002-vnb-lookup-codes-500-socket-hangup.md` — Status auf `resolved` gesetzt.
+
+#### Backend-Resolution RES-CR-0001 (strukturierte 422 Validation-Errors)
+Backend: Alle drei Dashboard-Actions mit Fastest-Validator `params`+Custom-Messages
+ausgestattet. Format: `422 VALIDATION_ERROR` mit `data[].field` + `data[].message`.
+
+- `src/types/ui.ts` — `ValidationFieldError`-Interface hinzugefügt.
+- `src/lib/utils.ts` — `getApiErrorMessage()` hinzugefügt; extrahiert bei 422
+  das erste `data[].message`, bei 503/404 die `message` aus dem Response-Body.
+- `feedback/CR-0001-validation-error-details.md` — Feedback-Datei erstellt, Status `resolved`.
+
+---
+
+## [0.20.1] — 2026-04-01
+
+### v0.20.1 — Feedback-System + VNB-Selektor-Fixes + Dashboard-Verbesserungen
+
+### Added
+
+#### Feedback-System
+- `feedback/` Verzeichnis als strukturierter Kommunikationskanal Frontend→Backend
+- `feedback/README.md` — Workflow-Beschreibung, Typ-Tabelle, Nummerierungsregeln
+- `feedback/TEMPLATE.md` — Vorlage für neue Feedback-Dateien (BR/CR/IR/DR)
+- `feedback/BR-0001-vnb-bdew-null-kpis.md` — Bug: TWL Netze hat zwei BDEW-Codes;
+  veralteter Code `9904350000002` (mastrId: null) wird bevorzugt geliefert
+- `feedback/CR-0001-validation-error-details.md` — Change: Strukturierte
+  Validierungsfehler mit `field`, `message`, `example`, `received`
+- `feedback/IR-0001-redispatch-eligible-null.md` — Info: `redispatchEligible`
+  ist permanent null; Klärung welche Implementierungsoption gewählt wird
+- `feedback/DR-0001-market-snapshot-region.md` — Doku: `region`-Default in
+  `market-snapshot` widerspricht v0.19.1-Verhalten
+- `.github/copilot-instructions.md` — Copilot-Instructions mit Feedback-Verweis
+
+#### Shared Components
+- `components/shared/vnb-conflict-dialog.tsx` — Dialog zur Auflösung von
+  BDEW-Konflikten; zeigt Kandidaten mit MaStR-ID, ermöglicht direkten Wechsel
+
+### Changed
+
+#### Hooks & Stores
+- `hooks/use-vnb-context.ts` — `useResolveVnbIdentity(bdewCode)` Hook hinzugefügt:
+  POST `/api/grid-operations/vnb-lookup-codes` nach VNB-Auswahl, liefert
+  `resolved`, `mastrId`, `conflictFlags`, `candidates`; exportiert neue
+  Interfaces `VnbLookupCodesResponse`, `ResolvedVnbIdentity`
+- `stores/vnb-store.ts` — `region: string | null` Feld ergänzt (abgeleitet aus
+  `market-partners` city); `setVnb()` nimmt optionales `region`-Argument;
+  `clearVnb()` setzt auch `region` zurück; persistiert in `cernion-vnb`
+- `config/api-endpoints.ts` — `VNB_LOOKUP_CODES` Konstante ergänzt
+
+#### Layout
+- `components/layout/header.tsx` — VNB-Selector prüft nach Auswahl via
+  `useResolveVnbIdentity`, ob `mastrId` vorhanden ist; bei `mastrId: null`
+  gelbe Warnung unterhalb des Inputs (klickbar → öffnet `VnbConflictDialog`);
+  Input erhält gelben Rand; `city` aus Market-Partners wird an `setVnb` übergeben
+
+#### Dashboard
+- `features/dashboard/dashboard-overview.tsx`:
+  - `redispatchEligible` KPI-Card wird ausgeblendet wenn Wert `null` ist
+    (verhindert Lücke im Grid; per UI-Contract `null = hide card`)
+  - Prominenter gelber Banner wenn `identity.mastrId` null und
+    `vnb-lookup-codes` Auflösung gescheitert ist; Banner enthält BDEW-Code
+    und optionalen „Andere BDEW-Codes anzeigen"-Button bei `conflictFlags`
+  - `VnbConflictDialog` auch im Dashboard integriert
+  - `InlineVnbPicker` übergibt `city` als `region` an `setVnb`
+
+---
+
+## [0.20.0] — 2026-03-31
+
+### Planned
 - v0.20.1 — Assets: AG Grid table, map, redispatch queue
 - v0.20.2 — Market: ECharts spot prices, forecasts, residual load, CO₂
 - v0.20.3 — Agents: MaStR-Quality, Grid-Connection, Energy-Sharing, Redispatch

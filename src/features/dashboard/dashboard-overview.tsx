@@ -2,22 +2,33 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useApiClient } from '@/hooks/use-api-client';
-import { useVnbContext } from '@/hooks/use-vnb-context';
+import { useVnbContext, useResolveVnbIdentity } from '@/hooks/use-vnb-context';
 import { API } from '@/config/api-endpoints';
 import { STALE_TIME_MEDIUM } from '@/lib/constants';
 import { KpiCard } from '@/components/shared/kpi-card';
 import { PartialDataBanner } from '@/components/shared/partial-data-banner';
 import { EmptyState } from '@/components/shared/empty-state';
+import { VnbConflictDialog } from '@/components/shared/vnb-conflict-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { SeverityChip } from '@/components/shared/severity-chip';
 import { DecisionBadge } from '@/components/shared/decision-badge';
-import { formatDateTime, displayValue } from '@/lib/utils';
-import { AlertTriangle, Activity, Building2, Zap, CheckCircle2, Database, Search, Check } from 'lucide-react';
+import { formatDateTime, displayValue, getApiErrorMessage } from '@/lib/utils';
+import {
+  AlertTriangle,
+  Activity,
+  Building2,
+  Zap,
+  CheckCircle2,
+  Database,
+  Search,
+  Check,
+} from 'lucide-react';
 import type { Severity, DecisionStatus } from '@/types/ui';
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { useMarketPartnerSearch } from '@/hooks/use-vnb-context';
+import type { ResolvedVnbIdentity } from '@/hooks/use-vnb-context';
 
 interface AgentResult {
   decision?: string;
@@ -74,6 +85,14 @@ const AGENT_LABELS: Record<string, string> = {
   redispatch: 'Redispatch 2.0',
 };
 
+/**
+ * Human-readable labels for service names appearing in vnb-overview._errors.
+ * Backend now returns structured errors instead of 500 socket hang-ups (RES-BR-0002).
+ */
+const VNB_OVERVIEW_ERROR_LABELS: Record<string, string> = {
+  'grid-operations.vnbLookupCodes': 'VNB-Stammdaten nicht verfügbar',
+};
+
 function InlineVnbPicker() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -87,8 +106,8 @@ function InlineVnbPicker() {
     }
   };
 
-  const select = (bdew: string, mastr: string, n: string) => {
-    setVnb(bdew, mastr, n);
+  const select = (bdew: string, mastr: string, n: string, city?: string) => {
+    setVnb(bdew, mastr, n, city);
     setQuery('');
     setOpen(false);
   };
@@ -125,7 +144,7 @@ function InlineVnbPicker() {
                 <li key={`${p.bdewCode}-${p.name}-${p.mastrId || 'na'}-${idx}`}>
                   <button
                     type="button"
-                    onMouseDown={(e) => { e.preventDefault(); select(p.bdewCode, p.mastrId, p.name); }}
+                    onMouseDown={(e) => { e.preventDefault(); select(p.bdewCode, p.mastrId, p.name, p.city); }}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
                   >
                     <Check className="h-3.5 w-3.5 shrink-0 opacity-0" />
@@ -162,10 +181,23 @@ function DashboardSkeleton() {
 }
 
 export function DashboardOverview() {
-  const { bdewCode, name } = useVnbContext();
+  const { bdewCode: storedBdewCode, name, setVnb, clearVnb } = useVnbContext();
   const { get } = useApiClient();
+  const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
 
-  const { data, isLoading, isError } = useQuery({
+  // Guard against SSR/CSR hydration mismatch: Zustand persist loads from
+  // localStorage synchronously on the client but is unavailable on the server.
+  // Defer bdewCode until after mount so the first client render matches the
+  // server-rendered HTML (both see null → empty state), preventing React 19
+  // hydration errors that would otherwise leave a blank page after reload.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  const bdewCode = mounted ? storedBdewCode : null;
+
+  const { data: resolvedIdentity } = useResolveVnbIdentity(bdewCode);
+  const mastrIdMissing = resolvedIdentity && !resolvedIdentity.resolved;
+
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['dashboard-vnb-overview', bdewCode],
     queryFn: () =>
       get<VnbOverviewResponse>(API.DASHBOARD_VNB_OVERVIEW, {
@@ -173,6 +205,8 @@ export function DashboardOverview() {
       }),
     staleTime: STALE_TIME_MEDIUM,
     enabled: !!bdewCode,
+    retry: false,
+    throwOnError: false,
   });
 
   // No VNB selected yet — show welcome/onboarding state
@@ -198,7 +232,16 @@ export function DashboardOverview() {
       <EmptyState
         icon={AlertTriangle}
         title="Dashboard nicht verfügbar"
-        description="Die VNB-Übersicht konnte nicht geladen werden. Prüfe die API-Verbindung."
+        description={getApiErrorMessage(error, 'Die VNB-Übersicht konnte nicht geladen werden. Möglicherweise wird dieser VNB nicht unterstützt.')}
+        action={
+          <button
+            type="button"
+            onClick={() => { clearVnb(); }}
+            className="mt-1 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent transition-colors"
+          >
+            Anderen VNB auswählen
+          </button>
+        }
       />
     );
   }
@@ -210,6 +253,11 @@ export function DashboardOverview() {
   const errors = data?._errors;
   const displayName = name ?? data?.identity?.name ?? 'Dashboard';
   const displayBdew = bdewCode ?? data?.identity?.bdew;
+
+  // Use identity from API response if store-resolved identity is null
+  const apiMastrId = data?.identity?.mastrId;
+  const showMastrIdBanner =
+    mastrIdMissing && !apiMastrId && !!resolvedIdentity;
 
   return (
     <div className="space-y-6">
@@ -223,12 +271,41 @@ export function DashboardOverview() {
         </div>
       </div>
 
-      {/* Partial data warning */}
-      {errors && errors.length > 0 && (
-        <PartialDataBanner sources={errors} messages={errors} />
+      {/* MaStR-ID missing banner */}
+      {showMastrIdBanner && resolvedIdentity && (
+        <div className="flex items-start gap-3 rounded-lg border border-yellow-400 bg-yellow-50 px-4 py-3 dark:border-yellow-700 dark:bg-yellow-950">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-600 dark:text-yellow-400" />
+          <div className="min-w-0 flex-1 text-sm text-yellow-800 dark:text-yellow-300">
+            <p className="font-medium">VNB-Identität konnte nicht vollständig aufgelöst werden.</p>
+            <p className="mt-0.5">
+              BDEW{' '}
+              <code className="rounded bg-yellow-100 px-1 py-0.5 font-mono text-xs dark:bg-yellow-900">
+                {resolvedIdentity.bdewCode}
+              </code>{' '}
+              hat keine zugeordnete MaStR-ID. KPI-Daten sind möglicherweise unvollständig.
+            </p>
+          </div>
+          {resolvedIdentity.conflictFlags.includes('multiple_strong_bdew_codes') && (
+            <button
+              type="button"
+              onClick={() => setConflictDialogOpen(true)}
+              className="shrink-0 rounded-md border border-yellow-400 bg-white px-2.5 py-1 text-xs font-medium text-yellow-800 hover:bg-yellow-50 dark:bg-yellow-900 dark:text-yellow-200 dark:hover:bg-yellow-800 transition-colors"
+            >
+              Andere BDEW-Codes anzeigen
+            </button>
+          )}
+        </div>
       )}
 
-      {/* KPI Cards */}
+      {/* Partial data warning from _errors */}
+      {errors && errors.length > 0 && (
+        <PartialDataBanner
+          sources={errors}
+          messages={errors.map((e) => VNB_OVERVIEW_ERROR_LABELS[e] ?? e)}
+        />
+      )}
+
+      {/* KPI Cards — redispatchEligible hidden when null */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         <KpiCard
           label="Anlagen gesamt"
@@ -250,12 +327,14 @@ export function DashboardOverview() {
           format="percent"
           threshold={{ warning: 80, critical: 60, direction: 'below' }}
         />
-        <KpiCard
-          label="Redispatch-Anlagen"
-          value={kpis?.redispatchEligible ?? null}
-          format="number"
-          threshold={{ warning: 5, critical: 20, direction: 'above' }}
-        />
+        {kpis?.redispatchEligible != null && (
+          <KpiCard
+            label="Redispatch-Anlagen"
+            value={kpis.redispatchEligible}
+            format="number"
+            threshold={{ warning: 5, critical: 20, direction: 'above' }}
+          />
+        )}
         <KpiCard
           label="Datenpunkte OK"
           value={kpis?.datapointsHealthy ?? null}
@@ -350,6 +429,16 @@ export function DashboardOverview() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Conflict dialog for dashboard banner */}
+      {showMastrIdBanner && resolvedIdentity && (
+        <VnbConflictDialog
+          open={conflictDialogOpen}
+          onOpenChange={setConflictDialogOpen}
+          identity={resolvedIdentity as ResolvedVnbIdentity}
+          onSelectCandidate={(bdew, mastr, n) => setVnb(bdew, mastr, n)}
+        />
+      )}
     </div>
   );
 }

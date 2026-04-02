@@ -98,6 +98,14 @@ export interface ErrorEnvelope {
   _errors?: string[];
 }
 
+/** One field-level error from Moleculer Fastest-Validator (422 VALIDATION_ERROR, `data[]`) */
+export interface ValidationFieldError {
+  type: string;
+  message: string;
+  field: string;
+  actual?: unknown;
+}
+
 export interface PartialDataWarning {
   sources: string[];
   messages: string[];

@@ -15,6 +15,7 @@ export const API = {
   // Grid Operations / VNB
   MARKET_PARTNERS: '/api/grid-operations/market-partners',
   VNB_LOOKUP: '/api/grid-operations/vnb-lookup',
+  VNB_LOOKUP_CODES: '/api/grid-operations/vnb-lookup-codes',
   REDISPATCH_EXPORT: '/api/grid-operations/redispatch-export',
 
   // Dashboard aggregates
@@ -68,3 +69,10 @@ export const API = {
   // System
   SYSTEM_STATUS: '/api/system/status',
 } as const;
+/**
+ * Fixed region for all market-snapshot calls.
+ * ENTSO-E only supports country-level bidding zones — sub-national regions
+ * (e.g. "Bayern") are invalid and return renewableForecast24h: null.
+ * Resolved via RES-DR-0001 (2026-04-01).
+ */
+export const MARKET_SNAPSHOT_REGION = 'Germany';
