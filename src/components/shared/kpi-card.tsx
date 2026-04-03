@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import {
   getThresholdState,
@@ -13,6 +14,7 @@ interface KpiCardProps extends KpiCardConfig {
   className?: string;
   isLoading?: boolean;
   icon?: LucideIcon;
+  href?: string;
 }
 
 function SkeletonKpiCard({ className }: { className?: string }) {
@@ -35,6 +37,7 @@ export function KpiCard({
   className,
   isLoading,
   icon: Icon,
+  href,
 }: KpiCardProps) {
   if (isLoading) return <SkeletonKpiCard className={className} />;
 
@@ -59,11 +62,12 @@ export function KpiCard({
     displayedValue = displayValue(value);
   }
 
-  return (
+  const card = (
     <div
       className={cn(
         'rounded-lg border bg-card p-4 shadow-sm transition-colors',
         threshold && numValue !== null && THRESHOLD_BG_COLORS[state],
+        href && 'cursor-pointer hover:ring-2 hover:ring-primary/30 hover:shadow-md',
         className
       )}
     >
@@ -105,4 +109,13 @@ export function KpiCard({
       )}
     </div>
   );
+
+  if (href) {
+    return (
+      <Link href={href} className="block">
+        {card}
+      </Link>
+    );
+  }
+  return card;
 }

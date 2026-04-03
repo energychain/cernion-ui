@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { useApiClient } from '@/hooks/use-api-client';
 import { useVnbContext, useResolveVnbIdentity } from '@/hooks/use-vnb-context';
@@ -89,8 +90,19 @@ const AGENT_LABELS: Record<string, string> = {
  * Human-readable labels for service names appearing in vnb-overview._errors.
  * Backend now returns structured errors instead of 500 socket hang-ups (RES-BR-0002).
  */
-const VNB_OVERVIEW_ERROR_LABELS: Record<string, string> = {
+const SERVICE_LABELS: Record<string, string> = {
   'grid-operations.vnbLookupCodes': 'VNB-Stammdaten nicht verfügbar',
+  'energy-market.prices':           'Strommarktdaten nicht verfügbar',
+  'entsoe.windSolarForecast':        'Erneuerbaren-Prognose nicht verfügbar',
+  'datapoint.health':                'Datenpunkt-Status nicht verfügbar',
+};
+
+/** Target routes for each agent result card. */
+const AGENT_HREFS: Record<string, string> = {
+  mastrQuality:   '/quality/mastr-audit',
+  gridConnection: '/quality/grid-connection',
+  energySharing:  '/quality/energy-sharing',
+  redispatch:     '/quality/redispatch',
 };
 
 function InlineVnbPicker() {
@@ -301,17 +313,18 @@ export function DashboardOverview() {
       {errors && errors.length > 0 && (
         <PartialDataBanner
           sources={errors}
-          messages={errors.map((e) => VNB_OVERVIEW_ERROR_LABELS[e] ?? e)}
+          messages={errors.map((e) => SERVICE_LABELS[e] ?? e)}
         />
       )}
 
-      {/* KPI Cards — redispatchEligible hidden when null */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+      {/* KPI Cards — redispatchEligible hidden when null (null = feature not supported by backend version) */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
         <KpiCard
           label="Anlagen gesamt"
           value={kpis?.totalInstallations ?? null}
           format="number"
           icon={Zap}
+          href="/assets"
         />
         <KpiCard
           label="Nennleistung"
@@ -319,6 +332,7 @@ export function DashboardOverview() {
           unit="MW"
           format="number"
           icon={Activity}
+          href="/assets"
         />
         <KpiCard
           label="MaStR-Score"
@@ -326,6 +340,7 @@ export function DashboardOverview() {
           unit="%"
           format="percent"
           threshold={{ warning: 80, critical: 60, direction: 'below' }}
+          href="/quality/mastr-audit"
         />
         {kpis?.redispatchEligible != null && (
           <KpiCard
@@ -333,6 +348,7 @@ export function DashboardOverview() {
             value={kpis.redispatchEligible}
             format="number"
             threshold={{ warning: 5, critical: 20, direction: 'above' }}
+            href="/assets?tab=redispatch"
           />
         )}
         <KpiCard
@@ -341,6 +357,23 @@ export function DashboardOverview() {
           format="number"
           icon={Database}
           threshold={{ warning: 1, critical: 0, direction: 'below' }}
+          href="/datapoints"
+        />
+        <KpiCard
+          label="Datenpunkte Stale"
+          value={kpis?.datapointsStale ?? null}
+          format="number"
+          icon={Database}
+          threshold={{ warning: 1, critical: 5, direction: 'above' }}
+          href="/datapoints?status=stale"
+        />
+        <KpiCard
+          label="Datenpunkte Fehler"
+          value={kpis?.datapointsErrored ?? null}
+          format="number"
+          icon={Database}
+          threshold={{ warning: 1, critical: 3, direction: 'above' }}
+          href="/datapoints?status=errored"
         />
       </div>
 
@@ -358,29 +391,49 @@ export function DashboardOverview() {
               <EmptyState description="Noch keine Agenten-Läufe vorhanden." className="py-6" />
             ) : (
               <div className="space-y-2">
-                {agentEntries.map(([key, result]) => (
-                  <div
-                    key={key}
-                    className="flex items-center justify-between rounded-lg border border-border p-2.5"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {AGENT_LABELS[key] ?? key}
-                      </p>
-                      {result?.lastRunAt && (
-                        <p className="text-xs text-muted-foreground">
-                          {formatDateTime(result.lastRunAt)}
-                          {result.findingCount != null && ` · ${result.findingCount} Findings`}
+                {agentEntries.map(([key, result]) => {
+                  const agentHref = AGENT_HREFS[key];
+                  const rowContent = (
+                    <>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {AGENT_LABELS[key] ?? key}
                         </p>
+                        {result?.lastRunAt && (
+                          <p className="text-xs text-muted-foreground">
+                            {formatDateTime(result.lastRunAt)}
+                            {result.findingCount != null && ` · ${result.findingCount} Findings`}
+                          </p>
+                        )}
+                      </div>
+                      {result ? (
+                        <DecisionBadge decision={result.decision as DecisionStatus} />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Noch nicht ausgeführt</span>
                       )}
+                    </>
+                  );
+
+                  if (agentHref) {
+                    return (
+                      <Link
+                        key={key}
+                        href={agentHref}
+                        className="flex items-center justify-between rounded-lg border border-border p-2.5 cursor-pointer hover:bg-accent/50 transition-colors"
+                      >
+                        {rowContent}
+                      </Link>
+                    );
+                  }
+                  return (
+                    <div
+                      key={key}
+                      className="flex items-center justify-between rounded-lg border border-border p-2.5"
+                    >
+                      {rowContent}
                     </div>
-                    {result ? (
-                      <DecisionBadge decision={result.decision as DecisionStatus} />
-                    ) : (
-                      <span className="text-xs text-muted-foreground">Noch nicht ausgeführt</span>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>

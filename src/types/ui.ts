@@ -106,6 +106,14 @@ export interface ValidationFieldError {
   actual?: unknown;
 }
 
+/** Full 422 VALIDATION_ERROR response envelope (CR-0001, resolved RES-CR-0001) */
+export interface ApiValidationError {
+  code: 422;
+  type: 'VALIDATION_ERROR';
+  message: string;
+  data: ValidationFieldError[];
+}
+
 export interface PartialDataWarning {
   sources: string[];
   messages: string[];

@@ -30,6 +30,8 @@ export const API = {
   ASSETS_WIND: '/api/assets/wind',
   ASSETS_STORAGE: '/api/assets/storage',
   ASSETS_BIOMASS: '/api/assets/biomass',
+  ASSETS_HYDRO: '/api/assets/hydro',
+  ASSETS_COMBUSTION: '/api/assets/combustion',
   ASSETS_LIST: '/api/assets/list',
 
   // Agent endpoints (async, return jobId)
